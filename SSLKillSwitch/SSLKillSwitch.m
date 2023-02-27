@@ -300,6 +300,43 @@ static OSStatus replaced_SecTrustSetPolicies(SecTrustRef trust, void* policies){
     return 0; // errSecSuccess
 }
 
+#pragma mark Manual Pinning ([NSURLSessionDelegate URLSession:didReceiveChallenge:completionHandler:])
+// https://developer.apple.com/documentation/foundation/nsurlauthenticationmethodservertrust
+// URLSession:didReceiveChallenge:completionHandler: are triggered in CFNetwork from 4 places:
+//   -[__NSCFLocalSessionTask _onqueue_didReceiveChallenge:request:withCompletion:] - easy to patch, usually triggers
+//   -[__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge:completionHandler:] - easy to patch, hardly triggers
+//   -[__NSURLBackgroundSession backgroundTask:didReceiveChallenge:reply:] - hard to patch (have some password auth setup inside), hardly triggers
+//   unknown - cannot analysis due to missing xref
+
+void checkChallengeAndOverride(id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential)) {
+	BOOL needOverrideCompletion = NO;
+
+	id protectionSpace = [challenge protectionSpace];
+	if ([@"https" isEqualToString:[protectionSpace protocol]]) {
+		needOverrideCompletion = YES;
+	}
+	if (needOverrideCompletion) {
+		dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),  ^{
+			completion(NSURLSessionAuthChallengeUseCredential, [[NSURLCredential alloc] initWithTrust:[protectionSpace serverTrust]]);
+		});
+	}
+}
+
+static void (*old__NSCFLocalSessionTask__onqueue_didReceiveChallenge)(id self, SEL _cmd, id challenge, id request, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) );
+static void new__NSCFLocalSessionTask__onqueue_didReceiveChallenge(id self, SEL _cmd, id challenge, id request, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) ) {
+	SSKLog(@"__NSCFLocalSessionTask _onqueue_didReceiveChallenge! protectionSpace: %@", [challenge protectionSpace]);
+	checkChallengeAndOverride(challenge, completion);
+	// return %orig(challenge, req, completion);
+}
+
+static BOOL (*old__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge)(id self, SEL _cmd, id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) );
+static BOOL new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge(id self, SEL _cmd, id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) ) {
+	SSKLog(@"__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge! protectionSpace: %@", [challenge protectionSpace]);
+	checkChallengeAndOverride(challenge, completion);
+	return YES;
+	// return %orig;
+}
+
 #pragma mark Dylib Constructor
 
 void hookF(const char *libName, const char *funcName, void *replaceFun, void **origFun) {
@@ -327,6 +364,9 @@ void hookF(const char *libName, const char *funcName, void *replaceFun, void **o
 }
 
 void hookM(Class _class, SEL _cmd, IMP _new, IMP *_old) {
+    if (!_class) {
+        return;
+    }
 #if SUBSTRATE_BUILD
     MSHookMessageEx(_class, _cmd, _new, _old);
 #else
@@ -435,6 +475,10 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         hookF(NULL, "SecTrustEvaluateFastAsync",(void *)  replaced_SecTrustEvaluateFastAsync, (void **) &original_SecTrustEvaluateFastAsync);
         // SecTrustEvaluateWithError iOS 6-
         hookF(NULL, "SecTrustSetPolicies",(void *)  replaced_SecTrustSetPolicies, (void **) &original_SecTrustSetPolicies);
+
+        // hook URLSession:didReceiveChallenge:completionHandler:
+        hookM(NSClassFromString(@"__NSCFLocalSessionTask"), NSSelectorFromString(@"_onqueue_didReceiveChallenge:request:withCompletion:"), (IMP) &new__NSCFLocalSessionTask__onqueue_didReceiveChallenge, (IMP *)&old__NSCFLocalSessionTask__onqueue_didReceiveChallenge);
+        hookM(NSClassFromString(@"__NSCFTCPIOStreamTask"), NSSelectorFromString(@"_onqueue_sendSessionChallenge:completionHandler:"), (IMP) &new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge, (IMP *)&old__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge);
     }
     else
     {
