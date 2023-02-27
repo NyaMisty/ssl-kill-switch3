@@ -1,0 +1,117 @@
+name: TheOS CI
+
+on:
+  push:
+    #tags:
+    #  - 'v*'
+
+    #branches: [ master ]
+  release:
+    types:
+      - created
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      ################################################
+      ### Pre-init
+      ################################################
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          submodules: recursive
+        
+      # - name: Update submodules
+      #   run: |
+      #     git submodule update --init --recursive
+      #     git submodule update --remote
+
+      ################################################
+      ### Setup Theos environment
+      ################################################
+      - name: Theos Setup (Check Cache)
+        id: verify-cache
+        run: |
+          echo "::set-output name=heads::`git ls-remote https://github.com/theos/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/xybp888/iOS-SDKs | head -n 1 | cut -f 1`"
+
+      - name: Theos Setup (Use Cache)
+        id: cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ github.workspace }}/theos
+          key: ${{ runner.os }}-${{ steps.verify-cache.outputs.heads }}
+
+      - name: Theos Setup (Setup)
+        uses: NyaMisty/theos-action@master
+        with: 
+          theos-sdks: https://github.com/xybp888/iOS-SDKs
+
+      
+      # Enable tmate debugging of manually-triggered workflows if the input option was provided
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug_enabled }}
+
+      - name: Build Debug package - Substrate
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          rm -f packages/*
+          make package
+      - name: Build Debug package - Fishhook
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          make FISHHOOK=1
+      # We have to split into two call because actions/upload-artifact will use common ancestor if multi path given
+      - name: Publish Debug artifact - Substrate
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: sslkillswitch3-debug
+          path: |
+            ${{ github.workspace }}/packages/*.deb
+      - name: Publish Debug artifact - Fishhook
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: sslkillswitch3-debug
+          path: |
+            ${{ github.workspace }}/.theos/obj/debug/*.dylib
+
+      - name: Get tag
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        id: tag
+        uses: dawidd6/action-get-tag@v1
+      
+      - name: Build Release package - Substrate
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          rm -f packages/*
+          TAGNAME=${{ steps.tag.outputs.tag }}
+          make package FINALPACKAGE=1 PACKAGE_VERSION=${TAGNAME#v}
+      - name: Build Release package - Fishhook
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          TAGNAME=${{ steps.tag.outputs.tag }}
+          make FISHHOOK=1 FINALPACKAGE=1
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        with:
+          files: |
+            ${{ github.workspace }}/packages/*.deb
+            ${{ github.workspace }}/.theos/obj/*.dylib
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
