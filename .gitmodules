@@ -1,0 +1,3 @@
+[submodule "SSLKillSwitch/fishhook"]
+	path = SSLKillSwitch/fishhook
+	url = https://github.com/facebook/fishhook.git
