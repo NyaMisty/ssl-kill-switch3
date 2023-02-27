@@ -311,7 +311,7 @@ static OSStatus replaced_SecTrustSetPolicies(SecTrustRef trust, void* policies){
 void checkChallengeAndOverride(id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential)) {
 	BOOL needOverrideCompletion = NO;
 
-	id protectionSpace = [challenge protectionSpace];
+	NSURLProtectionSpace *protectionSpace = [challenge protectionSpace];
 	if ([@"https" isEqualToString:[protectionSpace protocol]]) {
 		needOverrideCompletion = YES;
 	}
