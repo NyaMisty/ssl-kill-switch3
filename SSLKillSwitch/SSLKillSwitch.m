@@ -218,6 +218,87 @@ static void newRegisterOrigin(id self, SEL _cmd, NSString *origin)
     // This should force the App to downgrade from SPDY to HTTPS
 }
 
+#pragma mark SecPolicyCreateAppleSSLPinned hook
+// adapted from https://github.com/sskaje/ssl-kill-switch2/commit/92a4222a4db7b16179b5a3045e1647ce13532c75
+// use with AppleServerAuthenticationNoPinning in https://vtky.github.io/2021/01/05/apple-globalpreferences
+
+static bool (*original_SecIsInternalRelease)(void);
+static bool replace_SecIsInternalRelease(void) {
+    // SSKLog(@"replace_SecIsInternalRelease: void");
+    static bool isInternal = true;
+    return isInternal;
+}
+
+#pragma mark SecTrustEvaluate API hook
+// adapted from https://github.com/doug-leith/cydia/blob/7b14460d01224526a440267f3735b079bf0ab4eb/unpin/Tweak.m
+
+static OSStatus (*original_SecTrustEvaluate)(SecTrustRef trust, SecTrustResultType *result);
+static OSStatus replaced_SecTrustEvaluate(SecTrustRef trust, SecTrustResultType *result) {
+    OSStatus res = original_SecTrustEvaluate(trust, result);
+    #pragma unused (res)
+    if (result) {
+        SSKLog(@"Overrided SecTrustEvaluate() = %d, original result %d -> kSecTrustResultUnspecified(4)", res, *result);
+        // Actually, this certificate chain is trusted
+        *result = kSecTrustResultUnspecified;
+    }
+    return 0; // errSecSuccess
+}
+
+static bool (*original_SecTrustEvaluateWithError)(SecTrustRef trust, CFErrorRef *error);
+static bool replaced_SecTrustEvaluateWithError(SecTrustRef trust, CFErrorRef *error) {
+    bool res = original_SecTrustEvaluateWithError(trust, error);
+    #pragma unused (res)
+    if (error) {
+        if (*error) {
+            SSKLog(@"Overrided SecTrustEvaluateWithError() = %d, original err %@", (int)res, *error);
+            *error = nil;
+        }
+    }
+    return true; // true means trusted
+};
+
+static OSStatus (*original_SecTrustEvaluateAsync)(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result);
+static OSStatus replaced_SecTrustEvaluateAsync(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result){
+    dispatch_async(queue, ^{
+        SSKLog(@"Overrided SecTrustEvaluateAsync!");
+        result(
+            trust,      // SecTrustRef trust
+            1           // bool result
+        );  // call the callback with success result
+    });
+	return 0; // errSecSuccess
+}
+
+static OSStatus (*original_SecTrustEvaluateAsyncWithError)(SecTrustRef trust, dispatch_queue_t queue, SecTrustWithErrorCallback result);
+static OSStatus replaced_SecTrustEvaluateAsyncWithError(SecTrustRef trust, dispatch_queue_t queue, SecTrustWithErrorCallback result){
+    dispatch_async(queue, ^{
+        SSKLog(@"Overrided SecTrustEvaluateAsyncWithError!");
+        result(
+            trust,      // SecTrustRef trust
+            1,          // bool result
+            NULL        // CFErrorRef error (nullable)
+        );  // call the callback with success result
+    });
+	return 0; // errSecSuccess
+}
+
+static OSStatus (*original_SecTrustEvaluateFastAsync)(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result);
+static OSStatus replaced_SecTrustEvaluateFastAsync(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result){
+    dispatch_async(queue, ^{
+        SSKLog(@"Overrided SecTrustEvaluateFastAsync!");
+        result(
+            trust,      // SecTrustRef trust
+            1           // bool result
+        );  // call the callback with success result
+    });
+	return 0; // errSecSuccess
+}
+
+static OSStatus (*original_SecTrustSetPolicies)(SecTrustRef trust, void* policies);
+static OSStatus replaced_SecTrustSetPolicies(SecTrustRef trust, void* policies){
+    SSKLog(@"Overrided SecTrustEvaluateFastAsync!");
+    return 0; // errSecSuccess
+}
 
 #pragma mark Dylib Constructor
 
@@ -338,6 +419,22 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
 
             hookM(NSClassFromString(@"NSURLSessionConfiguration"), NSSelectorFromString(@"setprotocolClasses:"), (IMP) &newSetprotocolClasses, (IMP *)&oldSetprotocolClasses);
         }
+
+        // Security framework hook 1
+        hookF(NULL, "SecIsInternalRelease", (void *) replace_SecIsInternalRelease,  (void **) &original_SecIsInternalRelease);
+        
+        // SecTrustEvaluate iOS 2-13
+        // SecTrustEvaluateAsync iOS 7-13
+        hookF(NULL, "SecTrustEvaluate",(void *)  replaced_SecTrustEvaluate, (void **) &original_SecTrustEvaluate);
+        hookF(NULL, "SecTrustEvaluateAsync",(void *)  replaced_SecTrustEvaluateAsync, (void **) &original_SecTrustEvaluateAsync);
+        // SecTrustEvaluateWithError iOS 12-
+        // SecTrustEvaluateAsyncWithError iOS 13-
+        // SecTrustEvaluateFastAsync iOS 12-
+        hookF(NULL, "SecTrustEvaluateWithError",(void *)  replaced_SecTrustEvaluateWithError, (void **) &original_SecTrustEvaluateWithError);
+        hookF(NULL, "SecTrustEvaluateAsyncWithError",(void *)  replaced_SecTrustEvaluateAsyncWithError, (void **) &original_SecTrustEvaluateAsyncWithError);
+        hookF(NULL, "SecTrustEvaluateFastAsync",(void *)  replaced_SecTrustEvaluateFastAsync, (void **) &original_SecTrustEvaluateFastAsync);
+        // SecTrustEvaluateWithError iOS 6-
+        hookF(NULL, "SecTrustSetPolicies",(void *)  replaced_SecTrustSetPolicies, (void **) &original_SecTrustSetPolicies);
     }
     else
     {
