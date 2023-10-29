@@ -11,7 +11,19 @@ SSLKillSwitch2_FRAMEWORKS = Security
 
 ifndef FISHHOOK
 
-$(info Build as a Substrate Tweak)
+ifndef ROOTLESS
+$(info Build as a ROOTFUL Substrate Tweak)
+PACKAGE_BUILDNAME := rootful
+else # ROOTLESS
+$(info Build as a ROOTLESS Substrate Tweak)
+THEOS_PACKAGE_SCHEME=rootless
+PACKAGE_BUILDNAME := rootless
+endif # ROOTLESS
+
+ifneq ($(findstring DEBUG,$(THEOS_SCHEMA)),)
+PACKAGE_BUILDNAME := $(PACKAGE_BUILDNAME)debug
+endif
+
 SSLKillSwitch2_CFLAGS += -DSUBSTRATE_BUILD
 
 else  # FISHHOOK
