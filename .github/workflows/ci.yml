@@ -74,11 +74,16 @@ jobs:
           make clean
           rm -f packages/*
 
-      - name: Build Debug package - Substrate
+      - name: Build Debug package - Rootful Substrate
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           make clean
           make package
+      - name: Build Debug package - Rootless Substrate
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          make package ROOTLESS=1
       - name: Build Debug package - Fishhook
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
@@ -105,12 +110,18 @@ jobs:
         id: tag
         uses: dawidd6/action-get-tag@v1
       
-      - name: Build Release package - Substrate
+      - name: Build Release package - Rootful Substrate
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: |
           make clean
           TAGNAME=${{ steps.tag.outputs.tag }}
-          make package FINALPACKAGE=1 PACKAGE_VERSION=${TAGNAME#v}
+          make package FINALPACKAGE=1 PACKAGE_VERSION=${TAGNAME#v}+rootful
+      - name: Build Release package - Rootless Substrate
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          TAGNAME=${{ steps.tag.outputs.tag }}
+          make package ROOTLESS=1 FINALPACKAGE=1 PACKAGE_VERSION=${TAGNAME#v}+rootless
       - name: Build Release package - Fishhook
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: |
