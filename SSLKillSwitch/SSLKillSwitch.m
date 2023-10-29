@@ -15,10 +15,12 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
 
+#import <rootless.h>
+
 #if SUBSTRATE_BUILD
 #import "substrate.h"
 
-#define PREFERENCE_FILE @"/private/var/mobile/Library/Preferences/com.nablac0d3.SSLKillSwitchSettings.plist"
+#define PREFERENCE_FILE ROOT_PATH_NS("/private/var/mobile/Library/Preferences/com.nablac0d3.SSLKillSwitchSettings.plist")
 #define PREFERENCE_KEY @"shouldDisableCertificateValidation"
 
 #else // SUBSTRATE_BUILD

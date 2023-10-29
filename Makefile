@@ -1,7 +1,5 @@
 ARCHS := arm64 arm64e
 
-include $(THEOS)/makefiles/common.mk
-
 TWEAK_NAME = SSLKillSwitch2
 SSLKillSwitch2_FILES = SSLKillSwitch/SSLKillSwitch.m
 SSLKillSwitch2_CFLAGS = -fobjc-arc
@@ -34,6 +32,8 @@ SSLKillSwitch2_FILES += SSLKillSwitch/fishhook/fishhook.c
 SSLKillSwitch2_LOGOS_DEFAULT_GENERATOR = internal
 
 endif # FISHHOOK
+
+include $(THEOS)/makefiles/common.mk
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/aggregate.mk
