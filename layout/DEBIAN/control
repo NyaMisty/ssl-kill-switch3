@@ -1,10 +1,10 @@
-Package: com.nablac0d3.sslkillswitch2
-Name: SSL Kill Switch 2
+Package: moe.misty.sslkillswitch3
+Name: SSL Kill Switch 3
 Depends: mobilesubstrate, preferenceloader
 Conflicts: com.nablac0d3.sslkillswitch2
 Version: 1.1
 Architecture: iphoneos-arm64
 Description: Blackbox tool to disable SSL certificate validation - including certificate pinning - within iOS and OS X Apps.
-Maintainer: Alban Diquet <nabla.c0d3@gmail.com>
-Author: Alban Diquet <nabla.c0d3@gmail.com>
+Maintainer: NyaMisty <misty@misty.moe>
+Author: NyaMisty <misty@misty.moe>, Alban Diquet <nabla.c0d3@gmail.com>
 Section: Tweaks
