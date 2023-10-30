@@ -8,6 +8,8 @@
 
 // avoid deprecation warnings like kSSLSessionOptionBreakOnServerAuth
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-variable"
 
 #import <Foundation/Foundation.h>
 #import <Security/SecureTransport.h>
@@ -20,7 +22,7 @@
 #if SUBSTRATE_BUILD
 #import "substrate.h"
 
-#define PREFERENCE_FILE ROOT_PATH_NS("/private/var/mobile/Library/Preferences/com.nablac0d3.SSLKillSwitchSettings.plist")
+#define PREFERENCE_FILE ROOT_PATH_NS("/var/mobile/Library/Preferences/com.nablac0d3.SSLKillSwitchSettings.plist")
 #define PREFERENCE_KEY @"shouldDisableCertificateValidation"
 
 #else // SUBSTRATE_BUILD
@@ -40,7 +42,9 @@ static void SSKLog(NSString *format, ...)
     NSLogv(newFormat, args);
     va_end(args);
 }
-
+// we can use os_log instead, but need to replace 'SSKLog(@' to 'SSKLog('
+// #import <os/log.h>
+// #define SSKLog(format, ...) os_log(OS_LOG_DEFAULT, "=== SSL Kill Switch 2: " format, ##__VA_ARGS__)
 
 // Utility function to read the Tweak's preferences
 static BOOL shouldHookFromPreference()
@@ -52,7 +56,7 @@ static BOOL shouldHookFromPreference()
 
     if (!plist)
     {
-        SSKLog(@"Preference file not found.");
+        SSKLog(@"Preference file %@ not found.", PREFERENCE_FILE);
     }
     else
     {
@@ -298,7 +302,7 @@ static OSStatus replaced_SecTrustEvaluateFastAsync(SecTrustRef trust, dispatch_q
 
 static OSStatus (*original_SecTrustSetPolicies)(SecTrustRef trust, void* policies);
 static OSStatus replaced_SecTrustSetPolicies(SecTrustRef trust, void* policies){
-    SSKLog(@"Overrided SecTrustEvaluateFastAsync!");
+    SSKLog(@"Overrided SecTrustSetPolicies!");
     return 0; // errSecSuccess
 }
 
@@ -341,6 +345,32 @@ static BOOL new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge(id self, SEL 
 
 #pragma mark Dylib Constructor
 
+#include <ptrauth.h>
+
+static uint64_t parse_branch_instruction(uint32_t instruction, uint64_t pc) {
+    // parse B instruction
+    uint32_t opcode = (instruction >> 26) & 0x3F;
+    printf("%x\n", opcode);
+    uint32_t imm26 = instruction & 0x03FFFFFF;
+
+    // check if it's B instruction（opcode == 0b100101）
+    if (opcode != 0b000101) {
+        return 0;
+    }
+
+    // calc target address
+    uint32_t sign_bit = imm26 >> 25;
+    uint64_t offset = (imm26 << 2) & 0x1FFFFFF;
+    uint64_t target_address = pc + offset;
+
+    // handle imm26 sign bit
+    if (sign_bit) {
+        target_address -= (1 << 25);
+    }
+
+    return target_address;
+}
+
 void hookF(const char *libName, const char *funcName, void *replaceFun, void **origFun) {
     void *libHandle = RTLD_DEFAULT;
     if (libName) {
@@ -355,7 +385,15 @@ void hookF(const char *libName, const char *funcName, void *replaceFun, void **o
         return;
     }
 #if SUBSTRATE_BUILD
+        uint32_t *pIns = (uint32_t *)ptrauth_strip(pFunc, ptrauth_key_function_pointer);
+        uintptr_t targetAddr = parse_branch_instruction(pIns[0], (uint64_t)pIns);
+        if (targetAddr) {
+            SSKLog(@"%s jumps to %p: %llx, hook new addr instead!", funcName, targetAddr, *(void **)targetAddr);
+            pFunc = (void *)targetAddr;
+        }
         MSHookFunction(pFunc, replaceFun, origFun);
+        // uintptr_t a1 = tt[0], b1 = tt[0], c1 = tt[0];
+        // SSKLog(@"hooking func %s ptr %p from %llx %llx %llx to %llx %llx %llx", funcName, tt, a,b,c, a1,b1,c1);
 #else
         if (origFun)
             *origFun = pFunc;
