@@ -353,26 +353,26 @@ static BOOL new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge(id self, SEL 
 
 #pragma mark AFNetworking
 static BOOL (*old__AFSecurityPolicy_setSSLPinningMode)(id self, SEL _cmd, uintptr_t mode);
-static BOOL new__AFSecurityPolicy_setSSLPinningMode(id self, SEL _cmd, uintptr_t mode) {
-    SSKLog("AFSecurityPolicy setSSLPinningMode: %lld", mode);
+static BOOL new__AFSecurityPolicy_setSSLPinningMode(id self, SEL _cmd, int mode) {
+    SSKLog("AFSecurityPolicy setSSLPinningMode: %d -> 0", mode);
     return old__AFSecurityPolicy_setSSLPinningMode(self, _cmd, 0); // AFSSLPinningModeNone
 }
 
 static BOOL (*old__AFSecurityPolicy_setAllowInvalidCertificates)(id self, SEL _cmd, BOOL allow);
 static BOOL new__AFSecurityPolicy_setAllowInvalidCertificates(id self, SEL _cmd, BOOL allow) {
-    SSKLog("AFSecurityPolicy setAllowInvalidCertificates: %d", allow);
-    return old__AFSecurityPolicy_setAllowInvalidCertificates(self, _cmd, YES); // AFSSLPinningModeNone
+    SSKLog("AFSecurityPolicy setAllowInvalidCertificates: %d -> YES", allow);
+    return old__AFSecurityPolicy_setAllowInvalidCertificates(self, _cmd, YES);
 }
 
 static BOOL (*old__AFSecurityPolicy_policyWithPinningMode)(id cls, SEL _cmd, BOOL mode);
 static BOOL new__AFSecurityPolicy_policyWithPinningMode(id cls, SEL _cmd, BOOL mode) {
-    SSKLog("AFSecurityPolicy policyWithPinningMode: %d", mode);
+    SSKLog("AFSecurityPolicy policyWithPinningMode: %d -> AFSSLPinningModeNone", mode);
     return old__AFSecurityPolicy_setAllowInvalidCertificates(cls, _cmd, 0); // AFSSLPinningModeNone
 }
 
 static BOOL (*old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates)(id cls, SEL _cmd, BOOL mode, id cert);
 static BOOL new__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(id cls, SEL _cmd, BOOL mode, id cert) {
-    SSKLog("AFSecurityPolicy policyWithPinningMode: %d withPinnedCertificates: %@", mode, cert);
+    SSKLog("AFSecurityPolicy policyWithPinningMode: %d withPinnedCertificates: %@ -> AFSSLPinningModeNone", mode, cert);
     return old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(cls, _cmd, 0, cert); // AFSSLPinningModeNone
 }
 
