@@ -343,6 +343,50 @@ static BOOL new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge(id self, SEL 
 	// return %orig;
 }
 
+#pragma mark AFNetworking
+static BOOL (*old__AFSecurityPolicy_setSSLPinningMode)(id self, SEL _cmd, uintptr_t mode);
+static BOOL new__AFSecurityPolicy_setSSLPinningMode(id self, SEL _cmd, uintptr_t mode) {
+    SSKLog(@"AFSecurityPolicy setSSLPinningMode: %lld", mode);
+    return old__AFSecurityPolicy_setSSLPinningMode(self, _cmd, 0); // AFSSLPinningModeNone
+}
+
+static BOOL (*old__AFSecurityPolicy_setAllowInvalidCertificates)(id self, SEL _cmd, BOOL allow);
+static BOOL new__AFSecurityPolicy_setAllowInvalidCertificates(id self, SEL _cmd, BOOL allow) {
+    SSKLog(@"AFSecurityPolicy setAllowInvalidCertificates: %d", allow);
+    return old__AFSecurityPolicy_setAllowInvalidCertificates(self, _cmd, YES); // AFSSLPinningModeNone
+}
+
+static BOOL (*old__AFSecurityPolicy_policyWithPinningMode)(id cls, SEL _cmd, BOOL mode);
+static BOOL new__AFSecurityPolicy_policyWithPinningMode(id cls, SEL _cmd, BOOL mode) {
+    SSKLog(@"AFSecurityPolicy policyWithPinningMode: %d", mode);
+    return old__AFSecurityPolicy_setAllowInvalidCertificates(cls, _cmd, 0); // AFSSLPinningModeNone
+}
+
+static BOOL (*old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates)(id cls, SEL _cmd, BOOL mode, id cert);
+static BOOL new__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(id cls, SEL _cmd, BOOL mode, id cert) {
+    SSKLog(@"AFSecurityPolicy policyWithPinningMode: %d withPinnedCertificates: %@", mode, cert);
+    return old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(cls, _cmd, 0, cert); // AFSSLPinningModeNone
+}
+
+#pragma mark TrustKit - TSKPinningValidator
+
+// "- evaluateTrust:forHostname:"
+static int (*old__TSKPinningValidator_evaluateTrust_forHostname)(id self, SEL _cmd, id trust, id hostname);
+static int new__TSKPinningValidator_evaluateTrust_forHostname(id self, SEL _cmd, id trust, id hostname) {
+    int ret = old__TSKPinningValidator_evaluateTrust_forHostname(self, _cmd, trust, hostname); // AFSSLPinningModeNone
+    SSKLog(@"TSKPinningValidator evaluateTrust: %@ forHostname: %@ ret: %d -> 0", trust, hostname, ret);
+    return 0; // pass
+}
+
+#pragma mark cordova - CustomURLConnectionDelegate
+// "- isFingerprintTrusted:"
+static int (*old__CustomURLConnectionDelegate_isFingerprintTrusted)(id self, SEL _cmd, id fingerprint);
+static int new__CustomURLConnectionDelegate_isFingerprintTrusted(id self, SEL _cmd, id fingerprint) {
+    int ret = old__CustomURLConnectionDelegate_isFingerprintTrusted(self, _cmd, fingerprint); // AFSSLPinningModeNone
+    SSKLog(@"CustomURLConnectionDelegate isFingerprintTrusted: %@ ret: %d -> 0", fingerprint, ret);
+    return 0; // pass
+}
+
 #pragma mark Dylib Constructor
 
 #include <ptrauth.h>
@@ -403,12 +447,13 @@ void hookF(const char *libName, const char *funcName, void *replaceFun, void **o
 #endif
 }
 
-void hookM(Class _class, SEL _cmd, IMP _new, IMP *_old) {
+BOOL hookM(Class _class, SEL _cmd, IMP _new, IMP *_old) {
     if (!_class) {
-        return;
+        return NO;
     }
 #if SUBSTRATE_BUILD
     MSHookMessageEx(_class, _cmd, _new, _old);
+    return YES;
 #else
     // From: static void _logos_register_hook(Class _class, SEL _cmd, IMP _new, IMP* _old)
     unsigned int _count, _i;
@@ -426,12 +471,13 @@ void hookM(Class _class, SEL _cmd, IMP _new, IMP *_old) {
                                     method_getTypeEncoding(_methods[_i]));
                 }
                 free(_methods);
-                return;
+                return YES;
             }
         }
         free(_methods);
         _searchedClass = class_getSuperclass(_searchedClass);
     }
+    return NO;
 #endif
 }
 
@@ -517,8 +563,42 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         hookF(NULL, "SecTrustSetPolicies",(void *)  replaced_SecTrustSetPolicies, (void **) &original_SecTrustSetPolicies);
 
         // hook URLSession:didReceiveChallenge:completionHandler:
-        hookM(NSClassFromString(@"__NSCFLocalSessionTask"), NSSelectorFromString(@"_onqueue_didReceiveChallenge:request:withCompletion:"), (IMP) &new__NSCFLocalSessionTask__onqueue_didReceiveChallenge, (IMP *)&old__NSCFLocalSessionTask__onqueue_didReceiveChallenge);
-        hookM(NSClassFromString(@"__NSCFTCPIOStreamTask"), NSSelectorFromString(@"_onqueue_sendSessionChallenge:completionHandler:"), (IMP) &new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge, (IMP *)&old__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge);
+        if (!hookM(NSClassFromString(@"__NSCFLocalSessionTask"), NSSelectorFromString(@"_onqueue_didReceiveChallenge:request:withCompletion:"), (IMP) &new__NSCFLocalSessionTask__onqueue_didReceiveChallenge, (IMP *)&old__NSCFLocalSessionTask__onqueue_didReceiveChallenge)) {
+            SSKLog(@"Cannot find [__NSCFLocalSessionTask _onqueue_didReceiveChallenge:request:withCompletion:]");
+        }
+        if (!hookM(NSClassFromString(@"__NSCFTCPIOStreamTask"), NSSelectorFromString(@"_onqueue_sendSessionChallenge:completionHandler:"), (IMP) &new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge, (IMP *)&old__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge)) {
+            SSKLog(@"Cannot find [__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge:completionHandler:]");
+        }
+
+        // AFNetworking hook: https://github.com/sensepost/objection/blob/6c55d7e46292048d629dbe361701e5fe3e02d8d0/agent/src/ios/pinning.ts#L48
+        Class afSecurifyPolicyClass = NSClassFromString(@"AFSecurityPolicy");
+        if (afSecurifyPolicyClass)
+        {
+            SSKLog(@"AFNetworking detected; hooking it...");
+            // - setSSLPinningMode: & - setAllowInvalidCertificates:
+            hookM(afSecurifyPolicyClass, NSSelectorFromString(@"setSSLPinningMode:"), (IMP) &new__AFSecurityPolicy_setSSLPinningMode, (IMP *)&old__AFSecurityPolicy_setSSLPinningMode);
+            hookM(afSecurifyPolicyClass, NSSelectorFromString(@"setAllowInvalidCertificates:"), (IMP) &new__AFSecurityPolicy_setAllowInvalidCertificates, (IMP *)&old__AFSecurityPolicy_setAllowInvalidCertificates);
+            // + policyWithPinningMode: & + policyWithPinningMode:withPinnedCertificates:
+            hookM(object_getClass(afSecurifyPolicyClass), NSSelectorFromString(@"policyWithPinningMode:"), (IMP) &new__AFSecurityPolicy_policyWithPinningMode, (IMP *)&old__AFSecurityPolicy_policyWithPinningMode);
+            hookM(object_getClass(afSecurifyPolicyClass), NSSelectorFromString(@"policyWithPinningMode:withPinnedCertificates:"), (IMP) &new__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates, (IMP *)&old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates);
+        }
+        // TrustKit TSKPinningValidator hook: https://github.com/sensepost/objection/blob/6c55d7e46292048d629dbe361701e5fe3e02d8d0/agent/src/ios/pinning.ts#L254
+        Class tskPinningValidatorClass = NSClassFromString(@"TSKPinningValidator");
+        if (tskPinningValidatorClass)
+        {
+            SSKLog(@"TrustKit TSKPinningValidator detected; hooking it...");
+            // - evaluateTrust:forHostname:
+            hookM(tskPinningValidatorClass, NSSelectorFromString(@"evaluateTrust:forHostname:"), (IMP) &new__TSKPinningValidator_evaluateTrust_forHostname, (IMP *)&old__TSKPinningValidator_evaluateTrust_forHostname);
+        }
+        // SSLCertificateChecker-PhoneGap-Plugin CustomURLConnectionDelegate hook: https://github.com/sensepost/objection/blob/6c55d7e46292048d629dbe361701e5fe3e02d8d0/agent/src/ios/pinning.ts#L285
+        Class customURLConnectionDelegateClass = NSClassFromString(@"CustomURLConnectionDelegate");
+        if (customURLConnectionDelegateClass)
+        {
+            SSKLog(@"SSLCertificateChecker-PhoneGap-Plugin CustomURLConnectionDelegate detected; hooking it...");
+            // - isFingerprintTrusted:
+            hookM(customURLConnectionDelegateClass, NSSelectorFromString(@"isFingerprintTrusted:"), (IMP) &new__CustomURLConnectionDelegate_isFingerprintTrusted, (IMP *)&old__CustomURLConnectionDelegate_isFingerprintTrusted);
+        }
+
     }
     else
     {
