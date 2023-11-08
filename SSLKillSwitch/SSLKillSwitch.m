@@ -34,25 +34,50 @@
 
 #pragma mark Utility Functions
 
+#define SSKLOGLEVEL_VERBOSE     10
+#define SSKLOGLEVEL_INFO        6
+#define SSKLOGLEVEL_WARNING     4
+#define SSKLOGLEVEL_DISABLED    1
+
+int g_logLevel = SSKLOGLEVEL_VERBOSE; // for situations like Non-Substrate
+
 #ifndef USE_NSLOG
 
 // we use os_log instead, because we actually don't want to pollute the stderr
 #import <os/log.h>
-#define SSKLog(format, ...) os_log(OS_LOG_DEFAULT, "=== SSL Kill Switch 2: " format, ##__VA_ARGS__)
+#define _SSKLog(format, ...) os_log(OS_LOG_DEFAULT, "=== SSL Kill Switch 3: " format, ##__VA_ARGS__)
+// static void __SSKLog(NSString *format, ...)
+// {
+//     va_list args;
+//     va_start(args, format);
+//     NSString *newFormat = [[NSString alloc] initWithFormat:@"=== SSL Kill Switch 3: %{public}@", format];
+//     NSString *formatted = [[NSString alloc] initWithFormat:newFormat arguments:args];
+//     os_log(OS_LOG_DEFAULT, "%{public}@", formatted);
+//     va_end(args);
+// }
+// #define _SSKLog(format, ...) __SSKLog(@format, ##__VA_ARGS__)
 
 #else // USE_NSLOG
 
-static void _SSKLog(NSString *format, ...)
+static void __SSKLog(NSString *format, ...)
 {
-    NSString *newFormat = [[NSString alloc] initWithFormat:@"=== SSL Kill Switch 2: %@", format];
+    NSString *newFormat = [[NSString alloc] initWithFormat:@"=== SSL Kill Switch 3: %{public}@", format];
     va_list args;
     va_start(args, format);
     NSLogv(newFormat, args);
     va_end(args);
 }
-#define SSKLog(format, ...) _SSKLog(@format, ##__VA_ARGS__)
+#define _SSKLog(format, ...) __SSKLog(@format, ##__VA_ARGS__)
 
 #endif// USE_NSLOG
+
+#define SSKVerboseLog(format, ...) { if (g_logLevel >= SSKLOGLEVEL_VERBOSE) _SSKLog("[verb] " format, ##__VA_ARGS__); }
+#define SSKInfoLog(format, ...) { if (g_logLevel >= SSKLOGLEVEL_INFO) _SSKLog("[info] " format, ##__VA_ARGS__); }
+#define SSKWarningLog(format, ...) { if (g_logLevel >= SSKLOGLEVEL_WARNING) _SSKLog("[warn] " format, ##__VA_ARGS__); }
+
+#define HOOKBODY(body) {SSKVerboseLog(" >> Entering %{public}s()", __func__); body; SSKVerboseLog(" << Leaving %{public}s()", __func__);}
+
+#define UNUSED(var) ((void)(var));
 
 // Utility function to read the Tweak's preferences
 static BOOL shouldHookFromPreference()
@@ -64,12 +89,19 @@ static BOOL shouldHookFromPreference()
 
     if (!plist)
     {
-        SSKLog("Preference file %@ not found.", PREFERENCE_FILE);
+        SSKWarningLog("Preference file %{public}@ not found.", PREFERENCE_FILE);
     }
     else
     {
-        shouldHook = [[plist objectForKey:preferenceSetting] boolValue];
-        SSKLog("Preference set to %d.", shouldHook);
+        g_logLevel = [[plist objectForKey:@"logLevel"] integerValue];
+        if (!g_logLevel) {
+            SSKWarningLog("LogLevel is wrong (set to zero), we will output everything!");
+            g_logLevel = SSKLOGLEVEL_VERBOSE;
+        }
+        SSKInfoLog("Using LogLevel = %d", g_logLevel);
+
+        shouldHook = [[plist objectForKey:@"shouldDisableCertificateValidation"] boolValue];
+        SSKInfoLog("Preference set to %d.", shouldHook);
 
         // Checking if BundleId has been excluded by user
         NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
@@ -82,7 +114,7 @@ static BOOL shouldHookFromPreference()
 
         if ([excludedBundleIds containsObject:bundleId])
         {
-            SSKLog("Not hooking excluded bundle: %@", bundleId);
+            SSKInfoLog("Not hooking excluded bundle: %{public}@", bundleId);
             shouldHook = NO;
         }
     }
@@ -105,14 +137,14 @@ static OSStatus (*original_SSLSetSessionOption)(SSLContextRef context,
 static OSStatus replaced_SSLSetSessionOption(SSLContextRef context,
                                              SSLSessionOption option,
                                              Boolean value)
-{
+HOOKBODY({
     // Remove the ability to modify the value of the kSSLSessionOptionBreakOnServerAuth option
     if (option == kSSLSessionOptionBreakOnServerAuth)
     {
         return noErr;
     }
     return original_SSLSetSessionOption(context, option, value);
-}
+})
 
 
 static SSLContextRef (*original_SSLCreateContext)(CFAllocatorRef alloc,
@@ -122,19 +154,19 @@ static SSLContextRef (*original_SSLCreateContext)(CFAllocatorRef alloc,
 static SSLContextRef replaced_SSLCreateContext(CFAllocatorRef alloc,
                                                SSLProtocolSide protocolSide,
                                                SSLConnectionType connectionType)
-{
+HOOKBODY({
     SSLContextRef sslContext = original_SSLCreateContext(alloc, protocolSide, connectionType);
 
     // Immediately set the kSSLSessionOptionBreakOnServerAuth option in order to disable cert validation
     original_SSLSetSessionOption(sslContext, kSSLSessionOptionBreakOnServerAuth, true);
     return sslContext;
-}
+})
 
 
 static OSStatus (*original_SSLHandshake)(SSLContextRef context);
 
 static OSStatus replaced_SSLHandshake(SSLContextRef context)
-{
+HOOKBODY({
 
     OSStatus result = original_SSLHandshake(context);
 
@@ -146,7 +178,7 @@ static OSStatus replaced_SSLHandshake(SSLContextRef context)
     }
 
     return result;
-}
+})
 
 
 #pragma mark libsystem_coretls.dylib hooks - iOS 10
@@ -155,10 +187,10 @@ static OSStatus replaced_SSLHandshake(SSLContextRef context)
 static OSStatus (*original_tls_helper_create_peer_trust)(void *hdsk, bool server, SecTrustRef *trustRef);
 
 static OSStatus replaced_tls_helper_create_peer_trust(void *hdsk, bool server, SecTrustRef *trustRef)
-{
+HOOKBODY({
     // Do not actually set the trustRef
     return errSecSuccess;
-}
+})
 
 
 #pragma mark BoringSSL hooks - iOS 12
@@ -176,34 +208,32 @@ enum ssl_verify_result_t {
 
 
 char *replaced_SSL_get_psk_identity(void *ssl)
-{
+HOOKBODY({
     return "notarealPSKidentity";
-}
+})
 
 
 static int custom_verify_callback_that_does_not_validate(void *ssl, uint8_t *out_alert)
-{
+HOOKBODY({
     // Yes this certificate is 100% valid...
     return ssl_verify_ok;
-}
+})
 
 
 static void (*original_SSL_CTX_set_custom_verify)(void *ctx, int mode, int (*callback)(void *ssl, uint8_t *out_alert));
 static void replaced_SSL_CTX_set_custom_verify(void *ctx, int mode, int (*callback)(void *ssl, uint8_t *out_alert))
-{
-    SSKLog("Entering replaced_SSL_CTX_set_custom_verify()");
+HOOKBODY({
     original_SSL_CTX_set_custom_verify(ctx, SSL_VERIFY_NONE, custom_verify_callback_that_does_not_validate);
     return;
-}
+})
 
 
 static void (*original_SSL_set_custom_verify)(void *ssl, int mode, int (*callback)(void *ssl, uint8_t *out_alert));
 static void replaced_SSL_set_custom_verify(void *ssl, int mode, int (*callback)(void *ssl, uint8_t *out_alert))
-{
-    SSKLog("Entering replaced_SSL_set_custom_verify()");
+HOOKBODY({
     original_SSL_set_custom_verify(ssl, SSL_VERIFY_NONE, custom_verify_callback_that_does_not_validate);
     return;
-}
+})
 
 
 #pragma mark CocoaSPDY hook
@@ -211,82 +241,87 @@ static void replaced_SSL_set_custom_verify(void *ssl, int mode, int (*callback)(
 static void (*oldSetTLSTrustEvaluator)(id self, SEL _cmd, id evaluator);
 
 static void newSetTLSTrustEvaluator(id self, SEL _cmd, id evaluator)
-{
+HOOKBODY({
     // Set a nil evaluator to disable SSL validation
     oldSetTLSTrustEvaluator(self, _cmd, nil);
-}
+})
 
 static void (*oldSetprotocolClasses)(id self, SEL _cmd, NSArray <Class> *protocolClasses);
 
 static void newSetprotocolClasses(id self, SEL _cmd, NSArray <Class> *protocolClasses)
-{
+HOOKBODY({
     // Do not register protocol classes which is how CocoaSPDY works
     // This should force the App to downgrade from SPDY to HTTPS
-}
+})
 
 static void (*oldRegisterOrigin)(id self, SEL _cmd, NSString *origin);
 
 static void newRegisterOrigin(id self, SEL _cmd, NSString *origin)
-{
+HOOKBODY({
     // Do not register protocol classes which is how CocoaSPDY works
     // This should force the App to downgrade from SPDY to HTTPS
-}
+})
 
 #pragma mark SecPolicyCreateAppleSSLPinned hook
 // adapted from https://github.com/sskaje/ssl-kill-switch2/commit/92a4222a4db7b16179b5a3045e1647ce13532c75
 // use with AppleServerAuthenticationNoPinning in https://vtky.github.io/2021/01/05/apple-globalpreferences
 
 static bool (*original_SecIsInternalRelease)(void);
-static bool replace_SecIsInternalRelease(void) {
-    // SSKLog("replace_SecIsInternalRelease: void");
+static bool replace_SecIsInternalRelease(void) 
+HOOKBODY({
+    SSKVerboseLog("replace_SecIsInternalRelease: void");
     static bool isInternal = true;
     return isInternal;
-}
+})
 
 #pragma mark SecTrustEvaluate API hook
 // adapted from https://github.com/doug-leith/cydia/blob/7b14460d01224526a440267f3735b079bf0ab4eb/unpin/Tweak.m
 
 static OSStatus (*original_SecTrustEvaluate)(SecTrustRef trust, SecTrustResultType *result);
-static OSStatus replaced_SecTrustEvaluate(SecTrustRef trust, SecTrustResultType *result) {
+static OSStatus replaced_SecTrustEvaluate(SecTrustRef trust, SecTrustResultType *result) 
+HOOKBODY({
     OSStatus res = original_SecTrustEvaluate(trust, result);
-    #pragma unused (res)
+    UNUSED (res);
     if (result) {
-        SSKLog("Overrided SecTrustEvaluate() = %d, original result %d -> kSecTrustResultUnspecified(4)", res, *result);
+        SSKVerboseLog("Overrided SecTrustEvaluate() = %d, original result %d -> kSecTrustResultUnspecified(4)", res, *result);
         // Actually, this certificate chain is trusted
         *result = kSecTrustResultUnspecified;
     }
     return 0; // errSecSuccess
-}
+})
 
 static bool (*original_SecTrustEvaluateWithError)(SecTrustRef trust, CFErrorRef *error);
-static bool replaced_SecTrustEvaluateWithError(SecTrustRef trust, CFErrorRef *error) {
+static bool replaced_SecTrustEvaluateWithError(SecTrustRef trust, CFErrorRef *error) 
+HOOKBODY({
     bool res = original_SecTrustEvaluateWithError(trust, error);
-    #pragma unused (res)
+    UNUSED (res);
     if (error) {
         if (*error) {
-            SSKLog("Overrided SecTrustEvaluateWithError() = %d, original err %@", (int)res, *error);
+            SSKVerboseLog("Overrided SecTrustEvaluateWithError() = %d, original err %{public}@", (int)res, *error);
             *error = nil;
         }
     }
     return true; // true means trusted
-};
+})
 
 static OSStatus (*original_SecTrustEvaluateAsync)(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result);
-static OSStatus replaced_SecTrustEvaluateAsync(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result){
+static OSStatus replaced_SecTrustEvaluateAsync(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result)
+HOOKBODY({
     dispatch_async(queue, ^{
-        SSKLog("Overrided SecTrustEvaluateAsync!");
+        SSKVerboseLog("Overrided SecTrustEvaluateAsync!");
         result(
             trust,      // SecTrustRef trust
             1           // bool result
         );  // call the callback with success result
     });
 	return 0; // errSecSuccess
-}
+})
 
 static OSStatus (*original_SecTrustEvaluateAsyncWithError)(SecTrustRef trust, dispatch_queue_t queue, SecTrustWithErrorCallback result);
-static OSStatus replaced_SecTrustEvaluateAsyncWithError(SecTrustRef trust, dispatch_queue_t queue, SecTrustWithErrorCallback result){
+static OSStatus replaced_SecTrustEvaluateAsyncWithError(SecTrustRef trust, dispatch_queue_t queue, SecTrustWithErrorCallback result)
+HOOKBODY({
     dispatch_async(queue, ^{
-        SSKLog("Overrided SecTrustEvaluateAsyncWithError!");
+        SSKVerboseLog("Overrided SecTrustEvaluateAsyncWithError!");
         result(
             trust,      // SecTrustRef trust
             1,          // bool result
@@ -294,25 +329,27 @@ static OSStatus replaced_SecTrustEvaluateAsyncWithError(SecTrustRef trust, dispa
         );  // call the callback with success result
     });
 	return 0; // errSecSuccess
-}
+})
 
 static OSStatus (*original_SecTrustEvaluateFastAsync)(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result);
-static OSStatus replaced_SecTrustEvaluateFastAsync(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result){
+static OSStatus replaced_SecTrustEvaluateFastAsync(SecTrustRef trust, dispatch_queue_t queue, SecTrustCallback result)
+HOOKBODY({
     dispatch_async(queue, ^{
-        SSKLog("Overrided SecTrustEvaluateFastAsync!");
+        SSKVerboseLog("Overrided SecTrustEvaluateFastAsync!");
         result(
             trust,      // SecTrustRef trust
             1           // bool result
         );  // call the callback with success result
     });
 	return 0; // errSecSuccess
-}
+})
 
 static OSStatus (*original_SecTrustSetPolicies)(SecTrustRef trust, void* policies);
-static OSStatus replaced_SecTrustSetPolicies(SecTrustRef trust, void* policies){
-    SSKLog("Overrided SecTrustSetPolicies!");
+static OSStatus replaced_SecTrustSetPolicies(SecTrustRef trust, void* policies)
+HOOKBODY({
+    SSKVerboseLog("Overrided SecTrustSetPolicies!");
     return 0; // errSecSuccess
-}
+})
 
 #pragma mark Manual Pinning ([NSURLSessionDelegate URLSession:didReceiveChallenge:completionHandler:])
 // https://developer.apple.com/documentation/foundation/nsurlauthenticationmethodservertrust
@@ -337,63 +374,71 @@ void checkChallengeAndOverride(id challenge, void (^completion)(NSURLSessionAuth
 }
 
 static void (*old__NSCFLocalSessionTask__onqueue_didReceiveChallenge)(id self, SEL _cmd, id challenge, id request, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) );
-static void new__NSCFLocalSessionTask__onqueue_didReceiveChallenge(id self, SEL _cmd, id challenge, id request, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) ) {
-	SSKLog("__NSCFLocalSessionTask _onqueue_didReceiveChallenge! protectionSpace: %@", [challenge protectionSpace]);
+static void new__NSCFLocalSessionTask__onqueue_didReceiveChallenge(id self, SEL _cmd, id challenge, id request, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) ) 
+HOOKBODY({
+	SSKVerboseLog("__NSCFLocalSessionTask _onqueue_didReceiveChallenge! protectionSpace: %{public}@", [challenge protectionSpace]);
 	checkChallengeAndOverride(challenge, completion);
 	// return %orig(challenge, req, completion);
-}
+})
 
 static BOOL (*old__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge)(id self, SEL _cmd, id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) );
-static BOOL new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge(id self, SEL _cmd, id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) ) {
-	SSKLog("__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge! protectionSpace: %@", [challenge protectionSpace]);
+static BOOL new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge(id self, SEL _cmd, id challenge, void (^completion)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential) ) 
+HOOKBODY({
+	SSKVerboseLog("__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge! protectionSpace: %{public}@", [challenge protectionSpace]);
 	checkChallengeAndOverride(challenge, completion);
 	return YES;
 	// return %orig;
-}
+})
 
 #pragma mark AFNetworking
 static BOOL (*old__AFSecurityPolicy_setSSLPinningMode)(id self, SEL _cmd, uintptr_t mode);
-static BOOL new__AFSecurityPolicy_setSSLPinningMode(id self, SEL _cmd, int mode) {
-    SSKLog("AFSecurityPolicy setSSLPinningMode: %d -> 0", mode);
+static BOOL new__AFSecurityPolicy_setSSLPinningMode(id self, SEL _cmd, int mode) 
+HOOKBODY({
+    SSKVerboseLog("AFSecurityPolicy setSSLPinningMode: %d -> 0", mode);
     return old__AFSecurityPolicy_setSSLPinningMode(self, _cmd, 0); // AFSSLPinningModeNone
-}
+})
 
 static BOOL (*old__AFSecurityPolicy_setAllowInvalidCertificates)(id self, SEL _cmd, BOOL allow);
-static BOOL new__AFSecurityPolicy_setAllowInvalidCertificates(id self, SEL _cmd, BOOL allow) {
-    SSKLog("AFSecurityPolicy setAllowInvalidCertificates: %d -> YES", allow);
+static BOOL new__AFSecurityPolicy_setAllowInvalidCertificates(id self, SEL _cmd, BOOL allow) 
+HOOKBODY({
+    SSKVerboseLog("AFSecurityPolicy setAllowInvalidCertificates: %d -> YES", allow);
     return old__AFSecurityPolicy_setAllowInvalidCertificates(self, _cmd, YES);
-}
+})
 
 static BOOL (*old__AFSecurityPolicy_policyWithPinningMode)(id cls, SEL _cmd, BOOL mode);
-static BOOL new__AFSecurityPolicy_policyWithPinningMode(id cls, SEL _cmd, BOOL mode) {
-    SSKLog("AFSecurityPolicy policyWithPinningMode: %d -> AFSSLPinningModeNone", mode);
+static BOOL new__AFSecurityPolicy_policyWithPinningMode(id cls, SEL _cmd, BOOL mode) 
+HOOKBODY({
+    SSKVerboseLog("AFSecurityPolicy policyWithPinningMode: %d -> AFSSLPinningModeNone", mode);
     return old__AFSecurityPolicy_setAllowInvalidCertificates(cls, _cmd, 0); // AFSSLPinningModeNone
-}
+})
 
 static BOOL (*old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates)(id cls, SEL _cmd, BOOL mode, id cert);
-static BOOL new__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(id cls, SEL _cmd, BOOL mode, id cert) {
-    SSKLog("AFSecurityPolicy policyWithPinningMode: %d withPinnedCertificates: %@ -> AFSSLPinningModeNone", mode, cert);
+static BOOL new__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(id cls, SEL _cmd, BOOL mode, id cert) 
+HOOKBODY({
+    SSKVerboseLog("AFSecurityPolicy policyWithPinningMode: %d withPinnedCertificates: %{public}@ -> AFSSLPinningModeNone", mode, cert);
     return old__AFSecurityPolicy_policyWithPinningMode_withPinnedCertificates(cls, _cmd, 0, cert); // AFSSLPinningModeNone
-}
+})
 
 #pragma mark TrustKit - TSKPinningValidator
 
 // "- evaluateTrust:forHostname:"
 static int (*old__TSKPinningValidator_evaluateTrust_forHostname)(id self, SEL _cmd, id trust, id hostname);
-static int new__TSKPinningValidator_evaluateTrust_forHostname(id self, SEL _cmd, id trust, id hostname) {
+static int new__TSKPinningValidator_evaluateTrust_forHostname(id self, SEL _cmd, id trust, id hostname) 
+HOOKBODY({
     int ret = old__TSKPinningValidator_evaluateTrust_forHostname(self, _cmd, trust, hostname); // AFSSLPinningModeNone
-    SSKLog("TSKPinningValidator evaluateTrust: %@ forHostname: %@ ret: %d -> 0", trust, hostname, ret);
+    SSKVerboseLog("TSKPinningValidator evaluateTrust: %{public}@ forHostname: %{public}@ ret: %d -> 0", trust, hostname, ret);
     return 0; // pass
-}
+})
 
 #pragma mark cordova - CustomURLConnectionDelegate
 // "- isFingerprintTrusted:"
 static int (*old__CustomURLConnectionDelegate_isFingerprintTrusted)(id self, SEL _cmd, id fingerprint);
-static int new__CustomURLConnectionDelegate_isFingerprintTrusted(id self, SEL _cmd, id fingerprint) {
+static int new__CustomURLConnectionDelegate_isFingerprintTrusted(id self, SEL _cmd, id fingerprint) 
+HOOKBODY({
     int ret = old__CustomURLConnectionDelegate_isFingerprintTrusted(self, _cmd, fingerprint); // AFSSLPinningModeNone
-    SSKLog("CustomURLConnectionDelegate isFingerprintTrusted: %@ ret: %d -> 0", fingerprint, ret);
+    SSKVerboseLog("CustomURLConnectionDelegate isFingerprintTrusted: %{public}@ ret: %d -> 0", fingerprint, ret);
     return 0; // pass
-}
+})
 
 #pragma mark Dylib Constructor
 
@@ -424,6 +469,8 @@ static uint64_t parse_branch_instruction(uint32_t instruction, uint64_t pc) {
 }
 
 void hookF(const char *libName, const char *funcName, void *replaceFun, void **origFun) {
+    SSKVerboseLog("[init] hookF('%{public}s', '%{public}s', %p, %p);", libName ? libName:"(null)", funcName, replaceFun, origFun);
+
     void *libHandle = RTLD_DEFAULT;
     if (libName) {
         libHandle = dlopen(libName, RTLD_NOW);
@@ -433,29 +480,39 @@ void hookF(const char *libName, const char *funcName, void *replaceFun, void **o
     }
     void *pFunc = dlsym(libHandle, funcName);
     if (!pFunc) {
-        SSKLog("Failed to find function %s", funcName);
+        SSKInfoLog("[init] hookF failed to find function %{public}s", funcName);
         return;
     }
+    uint32_t *pIns = (uint32_t *)ptrauth_strip(pFunc, ptrauth_key_function_pointer);
+    SSKVerboseLog("[init] hookF resolved pFunc -> %p -> %p", pFunc, pIns);
+
 #if SUBSTRATE_BUILD
-        uint32_t *pIns = (uint32_t *)ptrauth_strip(pFunc, ptrauth_key_function_pointer);
+        void *originalMem[3] = {0};
+        memcpy(originalMem, pIns, sizeof(originalMem));
         uintptr_t targetAddr = parse_branch_instruction(pIns[0], (uint64_t)pIns);
         if (targetAddr) {
-            SSKLog("%s jumps to %p: %llx, hook new addr instead!", funcName, targetAddr, *(void **)targetAddr);
+            SSKInfoLog("%{public}s jumps to %p: %llx, hook new addr instead!", funcName, targetAddr, *(void **)targetAddr);
             pFunc = (void *)targetAddr;
         }
         MSHookFunction(pFunc, replaceFun, origFun);
-        // uintptr_t a1 = tt[0], b1 = tt[0], c1 = tt[0];
-        // SSKLog("hooking func %s ptr %p from %llx %llx %llx to %llx %llx %llx", funcName, tt, a,b,c, a1,b1,c1);
+
+        void *newMem[3] = {0};
+        memcpy(newMem, pIns, sizeof(newMem));
+        SSKVerboseLog("[init] hookF result: func %{public}s ptr %p, from %p %p %p to %p %p %p", 
+            funcName, pIns, 
+            originalMem[0], originalMem[1], originalMem[2],
+            newMem[0], newMem[1], newMem[2]);
 #else
         if (origFun)
             *origFun = pFunc;
         if (rebind_symbols((struct rebinding[1]){{(char *)funcName, (void *)replaceFun}}, 1) < 0) {
-            SSKLog("Failed to do fish hook for %s!", funcName);
+            SSKInfoLog("Failed to do fish hook for %{public}s!", funcName);
         }
 #endif
 }
 
 BOOL hookM(Class _class, SEL _cmd, IMP _new, IMP *_old) {
+    SSKVerboseLog("[init] hookM(%p, '%{public}@', %p, %p);", _class, NSStringFromSelector(_cmd), _new, _old);
     if (!_class) {
         return NO;
     }
@@ -494,7 +551,7 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
     // Only hook if the preference file says so
     if (shouldHookFromPreference())
     {
-        SSKLog("Hook enabled.");
+        SSKInfoLog("Hook enabled.");
 
         NSProcessInfo *processInfo = [NSProcessInfo processInfo];
         if ([processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){12, 0, 0}])
@@ -503,13 +560,13 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
 
             if ([processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){13, 0, 0}])
             {
-                SSKLog("iOS 13+ detected");
+                SSKInfoLog("iOS 13+ detected");
                 // iOS 13 uses SSL_set_custom_verify() which was recently added to BoringSSL
                 hookF("/usr/lib/libboringssl.dylib", "SSL_set_custom_verify", (void *) replaced_SSL_set_custom_verify,  (void **) &original_SSL_set_custom_verify);
             }
             else
             {
-                SSKLog("iOS 12 detected");
+                SSKInfoLog("iOS 12 detected");
                 // iOS 12 uses the older SSL_CTX_set_custom_verify()
                 hookF("/usr/lib/libboringssl.dylib", "SSL_CTX_set_custom_verify", (void *) replaced_SSL_CTX_set_custom_verify,  (void **) &original_SSL_CTX_set_custom_verify);
             }
@@ -520,19 +577,19 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
 		else if ([processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){11, 0, 0}])
 		{
             // Support for iOS 11
-            SSKLog("iOS 11 detected; hooking nw_tls_create_peer_trust()...");
+            SSKInfoLog("iOS 11 detected; hooking nw_tls_create_peer_trust()...");
 			hookF("/usr/lib/libnetwork.dylib", "nw_tls_create_peer_trust", (void *) replaced_tls_helper_create_peer_trust,  (void **) &original_tls_helper_create_peer_trust);
 		}
         else if ([processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){10, 0, 0}])
         {
             // Support for iOS 10
-            SSKLog("iOS 10 detected; hooking tls_helper_create_peer_trust()...");
+            SSKInfoLog("iOS 10 detected; hooking tls_helper_create_peer_trust()...");
             hookF(NULL, "tls_helper_create_peer_trust", (void *) replaced_tls_helper_create_peer_trust,  (void **) &original_tls_helper_create_peer_trust);
         }
         else if ([processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){8, 0, 0}])
         {
             // SecureTransport hooks - works up to iOS 9
-            SSKLog("iOS 8 or 9 detected; hooking SecureTransport...");
+            SSKInfoLog("iOS 8 or 9 detected; hooking SecureTransport...");
             hookF(NULL, "SSLHandshake",(void *)  replaced_SSLHandshake, (void **) &original_SSLHandshake);
             hookF(NULL, "SSLSetSessionOption",(void *)  replaced_SSLSetSessionOption, (void **) &original_SSLSetSessionOption);
             hookF(NULL, "SSLCreateContext",(void *)  replaced_SSLCreateContext, (void **) &original_SSLCreateContext);
@@ -543,7 +600,7 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         Class spdyProtocolClass = NSClassFromString(@"SPDYProtocol");
         if (spdyProtocolClass)
         {
-            SSKLog("CocoaSPDY detected; hooking it...");
+            SSKInfoLog("CocoaSPDY detected; hooking it...");
             // Disable trust evaluation
             hookM(object_getClass(spdyProtocolClass), NSSelectorFromString(@"setTLSTrustEvaluator:"), (IMP) &newSetTLSTrustEvaluator, (IMP *)&oldSetTLSTrustEvaluator);
 
@@ -554,6 +611,7 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
             hookM(NSClassFromString(@"NSURLSessionConfiguration"), NSSelectorFromString(@"setprotocolClasses:"), (IMP) &newSetprotocolClasses, (IMP *)&oldSetprotocolClasses);
         }
 
+        SSKInfoLog("Hooking Security framework...");
         // Security framework hook 1
         hookF(NULL, "SecIsInternalRelease", (void *) replace_SecIsInternalRelease,  (void **) &original_SecIsInternalRelease);
         
@@ -570,19 +628,20 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         // SecTrustEvaluateWithError iOS 6-
         hookF(NULL, "SecTrustSetPolicies",(void *)  replaced_SecTrustSetPolicies, (void **) &original_SecTrustSetPolicies);
 
+        SSKInfoLog("Hooking URLSession...");
         // hook URLSession:didReceiveChallenge:completionHandler:
         if (!hookM(NSClassFromString(@"__NSCFLocalSessionTask"), NSSelectorFromString(@"_onqueue_didReceiveChallenge:request:withCompletion:"), (IMP) &new__NSCFLocalSessionTask__onqueue_didReceiveChallenge, (IMP *)&old__NSCFLocalSessionTask__onqueue_didReceiveChallenge)) {
-            SSKLog("Cannot find [__NSCFLocalSessionTask _onqueue_didReceiveChallenge:request:withCompletion:]");
+            SSKInfoLog("Cannot find [__NSCFLocalSessionTask _onqueue_didReceiveChallenge:request:withCompletion:]");
         }
         if (!hookM(NSClassFromString(@"__NSCFTCPIOStreamTask"), NSSelectorFromString(@"_onqueue_sendSessionChallenge:completionHandler:"), (IMP) &new__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge, (IMP *)&old__NSCFTCPIOStreamTask__onqueue_sendSessionChallenge)) {
-            SSKLog("Cannot find [__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge:completionHandler:]");
+            SSKInfoLog("Cannot find [__NSCFTCPIOStreamTask _onqueue_sendSessionChallenge:completionHandler:]");
         }
 
         // AFNetworking hook: https://github.com/sensepost/objection/blob/6c55d7e46292048d629dbe361701e5fe3e02d8d0/agent/src/ios/pinning.ts#L48
         Class afSecurifyPolicyClass = NSClassFromString(@"AFSecurityPolicy");
         if (afSecurifyPolicyClass)
         {
-            SSKLog("AFNetworking detected; hooking it...");
+            SSKInfoLog("AFNetworking detected; hooking it...");
             // - setSSLPinningMode: & - setAllowInvalidCertificates:
             hookM(afSecurifyPolicyClass, NSSelectorFromString(@"setSSLPinningMode:"), (IMP) &new__AFSecurityPolicy_setSSLPinningMode, (IMP *)&old__AFSecurityPolicy_setSSLPinningMode);
             hookM(afSecurifyPolicyClass, NSSelectorFromString(@"setAllowInvalidCertificates:"), (IMP) &new__AFSecurityPolicy_setAllowInvalidCertificates, (IMP *)&old__AFSecurityPolicy_setAllowInvalidCertificates);
@@ -594,7 +653,7 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         Class tskPinningValidatorClass = NSClassFromString(@"TSKPinningValidator");
         if (tskPinningValidatorClass)
         {
-            SSKLog("TrustKit TSKPinningValidator detected; hooking it...");
+            SSKInfoLog("TrustKit TSKPinningValidator detected; hooking it...");
             // - evaluateTrust:forHostname:
             hookM(tskPinningValidatorClass, NSSelectorFromString(@"evaluateTrust:forHostname:"), (IMP) &new__TSKPinningValidator_evaluateTrust_forHostname, (IMP *)&old__TSKPinningValidator_evaluateTrust_forHostname);
         }
@@ -602,7 +661,7 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         Class customURLConnectionDelegateClass = NSClassFromString(@"CustomURLConnectionDelegate");
         if (customURLConnectionDelegateClass)
         {
-            SSKLog("SSLCertificateChecker-PhoneGap-Plugin CustomURLConnectionDelegate detected; hooking it...");
+            SSKInfoLog("SSLCertificateChecker-PhoneGap-Plugin CustomURLConnectionDelegate detected; hooking it...");
             // - isFingerprintTrusted:
             hookM(customURLConnectionDelegateClass, NSSelectorFromString(@"isFingerprintTrusted:"), (IMP) &new__CustomURLConnectionDelegate_isFingerprintTrusted, (IMP *)&old__CustomURLConnectionDelegate_isFingerprintTrusted);
         }
@@ -610,6 +669,6 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
     }
     else
     {
-        SSKLog("Hook disabled.");
+        SSKInfoLog("Hook disabled.");
     }
 }

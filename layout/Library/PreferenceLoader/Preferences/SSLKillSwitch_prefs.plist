@@ -9,7 +9,7 @@
 		<key>icon</key>
 		<string>SSLKillSwitch.png</string>
 		<key>label</key>
-		<string>SSL Kill Switch 2</string>
+		<string>SSL Kill Switch 3</string>
 	</dict>
 	<key>items</key>
 	<array>
@@ -19,7 +19,7 @@
 			<key>label</key>
 			<string></string>
 			<key>footerText</key>
-			<string>SSL Kill Switch 2</string>
+			<string>SSL Kill Switch 3</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -49,8 +49,36 @@
 			<key>noAutoCorrect</key>
 			<true/>
         </dict>
+		<dict>
+			<key>cell</key>
+			<string>PSLinkListCell</string>
+			<key>label</key>
+			<string>Log Level</string>
+			<key>key</key>
+			<string>logLevel</string>
+			<key>detail</key>
+			<string>PSListItemsController</string>
+			<key>default</key>
+			<integer>10</integer>
+			<key>validTitles</key>
+			<array>
+				<string>Verbose</string>
+				<string>Info</string>
+				<string>Warning</string>
+				<string>Disable Output</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<integer>10</integer>
+				<integer>6</integer>
+				<integer>4</integer>
+				<integer>1</integer>
+			</array>
+			<key>defaults</key>
+			<string>com.nablac0d3.SSLKillSwitchSettings</string>
+        </dict>
 	</array>
 	<key>title</key>
-	<string>SSL Kill Switch 2</string>
+	<string>SSL Kill Switch 3</string>
 </dict>
 </plist>
