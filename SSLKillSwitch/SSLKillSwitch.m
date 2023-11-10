@@ -75,7 +75,16 @@ static void __SSKLog(NSString *format, ...)
 #define SSKInfoLog(format, ...) { if (g_logLevel >= SSKLOGLEVEL_INFO) _SSKLog("[info] " format, ##__VA_ARGS__); }
 #define SSKWarningLog(format, ...) { if (g_logLevel >= SSKLOGLEVEL_WARNING) _SSKLog("[warn] " format, ##__VA_ARGS__); }
 
-#define HOOKBODY(body) {SSKVerboseLog(" >> Entering %{public}s()", __func__); body; SSKVerboseLog(" << Leaving %{public}s()", __func__);}
+
+static void __hookbody_leaved(char (*p)[]) {
+    SSKVerboseLog(" << Leaving %{public}s()", *p);
+}
+
+#define HOOKBODY(body) { \
+    SSKVerboseLog(" >> Entering %{public}s()", __func__); \
+    __attribute__((cleanup(__hookbody_leaved))) char _hookbody_defer[0x100]; \
+    strcpy(_hookbody_defer, __func__); body; \
+}
 
 #define UNUSED(var) ((void)(var));
 
@@ -351,6 +360,23 @@ HOOKBODY({
     return 0; // errSecSuccess
 })
 
+static Boolean (*original_SecKeyVerifySignature)(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef signedData, CFDataRef signature, CFErrorRef *error);
+static Boolean replaced_SecKeyVerifySignature(SecKeyRef key, SecKeyAlgorithm algorithm, CFDataRef signedData, CFDataRef signature, CFErrorRef *error)
+HOOKBODY({
+    SSKVerboseLog("Overrided SecKeyVerifySignature!");
+    if (!!error) {
+        *error = NULL;
+    }
+    return TRUE;
+})
+
+static OSStatus (*original_SecKeyRawVerify)(SecKeyRef key, SecPadding padding, const uint8_t *signedData, size_t signedDataLen, const uint8_t *sig, size_t sigLen);
+static OSStatus replaced_SecKeyRawVerify(SecKeyRef key, SecPadding padding, const uint8_t *signedData, size_t signedDataLen, const uint8_t *sig, size_t sigLen)
+HOOKBODY({
+    SSKVerboseLog("Overrided SecKeyRawVerify!");
+    return errSecSuccess;
+})
+
 #pragma mark Manual Pinning ([NSURLSessionDelegate URLSession:didReceiveChallenge:completionHandler:])
 // https://developer.apple.com/documentation/foundation/nsurlauthenticationmethodservertrust
 // URLSession:didReceiveChallenge:completionHandler: are triggered in CFNetwork from 4 places:
@@ -494,6 +520,7 @@ void hookF(const char *libName, const char *funcName, void *replaceFun, void **o
             SSKInfoLog("%{public}s jumps to %p: %llx, hook new addr instead!", funcName, targetAddr, *(void **)targetAddr);
             pFunc = (void *)targetAddr;
         }
+        // SSKVerboseLog("MSHookFunction(%p, %p, %p)");
         MSHookFunction(pFunc, replaceFun, origFun);
 
         void *newMem[3] = {0};
@@ -627,6 +654,10 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
         hookF(NULL, "SecTrustEvaluateFastAsync",(void *)  replaced_SecTrustEvaluateFastAsync, (void **) &original_SecTrustEvaluateFastAsync);
         // SecTrustEvaluateWithError iOS 6-
         hookF(NULL, "SecTrustSetPolicies",(void *)  replaced_SecTrustSetPolicies, (void **) &original_SecTrustSetPolicies);
+        // SecKeyVerifySignature iOS 10-
+        // SecKeyRawVerify iOS 2-15
+        hookF(NULL, "SecKeyVerifySignature",(void *)  replaced_SecKeyVerifySignature, (void **) &original_SecKeyVerifySignature);
+        hookF(NULL, "SecKeyRawVerify",(void *)  replaced_SecKeyRawVerify, (void **) &original_SecKeyRawVerify);
 
         SSKInfoLog("Hooking URLSession...");
         // hook URLSession:didReceiveChallenge:completionHandler:
@@ -666,6 +697,7 @@ __attribute__((constructor)) static void init(int argc, const char **argv)
             hookM(customURLConnectionDelegateClass, NSSelectorFromString(@"isFingerprintTrusted:"), (IMP) &new__CustomURLConnectionDelegate_isFingerprintTrusted, (IMP *)&old__CustomURLConnectionDelegate_isFingerprintTrusted);
         }
 
+        SSKInfoLog("Finished Hooking!");
     }
     else
     {
