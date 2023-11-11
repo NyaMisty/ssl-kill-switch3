@@ -40,7 +40,8 @@ jobs:
       - name: Theos Setup (Check Cache)
         id: verify-cache
         run: |
-          echo "::set-output name=heads::`git ls-remote https://github.com/theos/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/xybp888/iOS-SDKs | head -n 1 | cut -f 1`"
+          #echo "::set-output name=heads::`git ls-remote https://github.com/theos/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/xybp888/iOS-SDKs | head -n 1 | cut -f 1`"
+          echo "::set-output name=heads::`git ls-remote https://github.com/roothide/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/xybp888/iOS-SDKs | head -n 1 | cut -f 1`"
 
       - name: Theos Setup (Use Cache)
         id: cache
@@ -52,8 +53,8 @@ jobs:
       - name: Theos Setup (Setup)
         uses: NyaMisty/theos-action@master
         with: 
-          theos-sdks: https://github.com/xybp888/iOS-SDKs
-
+          theos-src: https://github.com/roothide/theos
+          #theos-sdks: https://github.com/xybp888/iOS-SDKs
       
       # Enable tmate debugging of manually-triggered workflows if the input option was provided
       - name: Setup tmate session
@@ -84,6 +85,11 @@ jobs:
         run: |
           make clean
           make package ROOTLESS=1
+      - name: Build Debug package - Roothide Substrate
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          make package ROOTHIDE=1
       - name: Build Debug package - Fishhook
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
@@ -122,6 +128,12 @@ jobs:
           make clean
           TAGNAME=${{ steps.tag.outputs.tag }}
           make package ROOTLESS=1 FINALPACKAGE=1 PACKAGE_VERSION=${TAGNAME#v}+rootless
+      - name: Build Release package - Rootless Substrate
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          make clean
+          TAGNAME=${{ steps.tag.outputs.tag }}
+          make package ROOTHIDE=1 FINALPACKAGE=1 PACKAGE_VERSION=${TAGNAME#v}+roothide
       - name: Build Release package - Fishhook
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: |
