@@ -17,12 +17,17 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
 
+#ifndef THEOS_PACKAGE_SCHEME_ROOTHIDE
 #import <rootless.h>
+#else
+#import <roothide.h>
+#define ROOT_PATH_NS jbroot
+#endif
 
 #if SUBSTRATE_BUILD
 #import "substrate.h"
 
-#define PREFERENCE_FILE ROOT_PATH_NS("/var/mobile/Library/Preferences/com.nablac0d3.SSLKillSwitchSettings.plist")
+#define PREFERENCE_FILE ROOT_PATH_NS(@"/var/mobile/Library/Preferences/com.nablac0d3.SSLKillSwitchSettings.plist")
 #define PREFERENCE_KEY @"shouldDisableCertificateValidation"
 
 #else // SUBSTRATE_BUILD
