@@ -4,6 +4,7 @@
 			"com.apple.AuthKit",
 			"com.apple.UIKit",
 			"com.apple.itunesstored",
+			"com.apple.Security"
 		);
 	};
 }
